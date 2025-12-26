@@ -1,4 +1,4 @@
-# Last update: 2025-12-26 00:34:53 
+# Last update: 2025-12-26 00:41:25 
 import random
 import sys
 import traceback
@@ -152,8 +152,13 @@ def lighten(color, amount):
 
 
 def draw_tile(surface, rect, color):
-    pygame.draw.rect(surface, color, rect.inflate(-4, -4), border_radius=6)
-    pygame.draw.rect(surface, lighten(color, 50), rect.inflate(-8, -8), 2, border_radius=6)
+    base = color
+    dark = (max(base[0] - 40, 0), max(base[1] - 40, 0), max(base[2] - 40, 0))
+    pygame.draw.rect(surface, base, rect.inflate(-4, -4), border_radius=6)
+    pygame.draw.rect(surface, dark, rect.inflate(-6, -6), 2, border_radius=6)
+    highlight = pygame.Surface((rect.width - 12, rect.height - 14), pygame.SRCALPHA)
+    pygame.draw.rect(highlight, (255, 255, 255, 50), highlight.get_rect(), border_radius=6)
+    surface.blit(highlight, (rect.x + 6, rect.y + 5))
 
 def rotate(shape):
     return ["".join(shape[3 - c][r] for c in range(4)) for r in range(4)]
@@ -219,11 +224,11 @@ def board_metrics(board):
     return aggregate_height, holes, bumpiness, max_height
 
 
-def place_on_board(board, shape, x, y, color):
+def place_on_board(board, shape, x, y, value):
     new_board = [row[:] for row in board]
     for cx, cy in shape_cells(shape, x, y):
         if cy >= 0:
-            new_board[cy][cx] = color
+            new_board[cy][cx] = value
     return new_board
 
 
@@ -251,7 +256,7 @@ def evaluate_board(board, lines_cleared):
     }
 
 
-def best_move(board, shape, color):
+def best_move(board, shape, piece_index):
     best = None
     rotations = unique_rotations(shape)
     for rot_index, rot in enumerate(rotations):
@@ -262,7 +267,7 @@ def best_move(board, shape, color):
             cells = shape_cells(rot, x, y)
             if not valid(cells, board):
                 continue
-            placed = place_on_board(board, rot, x, y, color)
+            placed = place_on_board(board, rot, x, y, piece_index)
             cleared_board, cleared = clear_lines(placed)
             metrics = evaluate_board(cleared_board, cleared)
             if best is None or metrics["score"] > best["metrics"]["score"]:
@@ -416,7 +421,7 @@ def main():
 
         def plan_ai():
             nonlocal ai_queue, ai_info
-            ai_info = best_move(board, shape, color)
+            ai_info = best_move(board, shape, current)
             ai_queue = []
             if ai_info is None:
                 return
@@ -461,7 +466,7 @@ def main():
                     elif event.key == pygame.K_a and not game_over:
                         ai_enabled = not ai_enabled
                         ai_queue = []
-                    elif not ai_enabled:
+                    elif not ai_enabled and not game_over:
                         if event.key == pygame.K_LEFT:
                             move_left()
                         elif event.key == pygame.K_RIGHT:
@@ -505,13 +510,15 @@ def main():
                 else:
                     for cx, cy in shape_cells(shape, x, y):
                         if cy >= 0:
-                            board[cy][cx] = color
+                            board[cy][cx] = current
                     board, cleared = clear_lines(board)
                     if cleared:
                         score += (cleared * cleared) * 100
                         drop_interval = max(120, drop_interval - cleared * 20)
                     if not spawn():
                         game_over = True
+                        shape = None
+                        ai_info = None
                     ai_queue = []
 
             draw_vertical_gradient(screen, BG_TOP, BG_BOTTOM)
@@ -534,25 +541,27 @@ def main():
                 for col in range(COLS):
                     cell = board[row][col]
                     if cell is not None:
+                        cell_color = COLORS[cell]
                         rect = pygame.Rect(
                             board_x + col * CELL,
                             board_y + row * CELL,
                             CELL,
                             CELL,
                         )
-                        draw_tile(screen, rect, cell)
+                        draw_tile(screen, rect, cell_color)
 
-            for cx, cy in shape_cells(shape, x, y):
-                if cy >= 0:
-                    rect = pygame.Rect(
-                        board_x + cx * CELL,
-                        board_y + cy * CELL,
-                        CELL,
-                        CELL,
-                    )
-                    draw_tile(screen, rect, color)
+            if shape is not None:
+                for cx, cy in shape_cells(shape, x, y):
+                    if cy >= 0:
+                        rect = pygame.Rect(
+                            board_x + cx * CELL,
+                            board_y + cy * CELL,
+                            CELL,
+                            CELL,
+                        )
+                        draw_tile(screen, rect, color)
 
-            if ai_info is not None:
+            if ai_info is not None and shape is not None:
                 for cx, cy in ai_info["cells"]:
                     if cy >= 0:
                         rect = pygame.Rect(

@@ -221,7 +221,9 @@ def main():
                 pygame.draw.rect(screen, color, rect.inflate(-2, -2))
 
         score_surf = font.render(f"Score: {score}", True, TEXT)
+        hint_surf = font.render("Arrows: move/rotate  Space: drop  ESC: quit", True, TEXT)
         screen.blit(score_surf, (8, 6))
+        screen.blit(hint_surf, (8, 26))
 
         pygame.display.flip()
 

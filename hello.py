@@ -1,6 +1,7 @@
-# Last update: 2025-12-25 23:58:28 EST
 import random
 import sys
+from datetime import datetime
+from pathlib import Path
 
 import pygame
 
@@ -110,6 +111,20 @@ def clear_lines(board):
 
 
 def main():
+    # Update the first-line timestamp when the game starts.
+    try:
+        path = Path(__file__)
+        lines = path.read_text().splitlines()
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
+        header = f"# Last update: {stamp}"
+        if lines and lines[0].startswith("# Last update:"):
+            lines[0] = header
+        else:
+            lines.insert(0, header)
+        path.write_text("\n".join(lines) + "\n")
+    except OSError:
+        pass
+
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("Tetris")

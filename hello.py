@@ -1,6 +1,8 @@
-# Last update: 2025-12-26 00:03:41 
+# Last update: 2025-12-26 00:24:08 
 import random
 import sys
+import traceback
+import atexit
 from datetime import datetime
 from pathlib import Path
 
@@ -214,7 +216,41 @@ def best_move(board, shape, color):
     return best
 
 
+def setup_logging():
+    log_path = Path(__file__).with_name("tetris_log.txt")
+    try:
+        log_file = log_path.open("w", encoding="utf-8")
+    except OSError:
+        return None
+
+    sys.stdout = log_file
+    sys.stderr = log_file
+    print("Tetris log start")
+    log_file.flush()
+
+    def _hook(exc_type, exc, tb):
+        traceback.print_exception(exc_type, exc, tb)
+        try:
+            log_file.flush()
+        except Exception:
+            pass
+
+    sys.excepthook = _hook
+
+    def _close():
+        try:
+            log_file.flush()
+            log_file.close()
+        except Exception:
+            pass
+
+    atexit.register(_close)
+    return log_file
+
+
 def main():
+    log_file = setup_logging()
+
     # Update the first-line timestamp when the game starts.
     try:
         path = Path(__file__)
@@ -229,246 +265,270 @@ def main():
     except OSError:
         pass
 
-    pygame.init()
-    screen = pygame.display.set_mode((WINDOW_W, HEIGHT))
-    pygame.display.set_caption("Tetris")
-    clock = pygame.time.Clock()
-    font = pygame.font.SysFont("Menlo", 18)
-    small = pygame.font.SysFont("Menlo", 14)
+    try:
+        pygame.init()
+        screen = pygame.display.set_mode((WINDOW_W, HEIGHT))
+        pygame.display.set_caption("Tetris")
+        clock = pygame.time.Clock()
+        font = pygame.font.SysFont("Menlo", 18)
+        small = pygame.font.SysFont("Menlo", 14)
 
-    board = [[None for _ in range(COLS)] for _ in range(ROWS)]
-    score = 0
-    drop_interval = 700
-    drop_timer = 0
-    ai_enabled = True
-    ai_queue = []
-    ai_timer = 0
-    ai_interval = 60
-    ai_info = None
-    history = []
+        board = [[None for _ in range(COLS)] for _ in range(ROWS)]
+        score = 0
+        drop_interval = 700
+        drop_timer = 0
+        ai_enabled = True
+        ai_queue = []
+        ai_timer = 0
+        ai_interval = max(20, 120)
+        ai_info = None
+        history = []
 
-    current = random.randrange(len(SHAPES))
-    shape = SHAPES[current]
-    color = COLORS[current]
-    x = COLS // 2 - 2
-    y = -2
-
-    def spawn():
-        nonlocal current, shape, color, x, y
         current = random.randrange(len(SHAPES))
         shape = SHAPES[current]
         color = COLORS[current]
         x = COLS // 2 - 2
         y = -2
-        return valid(shape_cells(shape, x, y), board)
 
-    def move_left():
-        nonlocal x
-        nx = x - 1
-        if valid(shape_cells(shape, nx, y), board):
-            x = nx
+        def spawn():
+            nonlocal current, shape, color, x, y
+            current = random.randrange(len(SHAPES))
+            shape = SHAPES[current]
+            color = COLORS[current]
+            x = COLS // 2 - 2
+            y = -2
+            return valid(shape_cells(shape, x, y), board)
 
-    def move_right():
-        nonlocal x
-        nx = x + 1
-        if valid(shape_cells(shape, nx, y), board):
-            x = nx
+        def move_left():
+            nonlocal x
+            nx = x - 1
+            if valid(shape_cells(shape, nx, y), board):
+                x = nx
 
-    def move_down():
-        nonlocal y
-        ny = y + 1
-        if valid(shape_cells(shape, x, ny), board):
-            y = ny
-            return True
-        return False
+        def move_right():
+            nonlocal x
+            nx = x + 1
+            if valid(shape_cells(shape, nx, y), board):
+                x = nx
 
-    def rotate_piece():
-        nonlocal shape
-        r = rotate(shape)
-        if valid(shape_cells(r, x, y), board):
-            shape = r
+        def move_down():
+            nonlocal y
+            ny = y + 1
+            if valid(shape_cells(shape, x, ny), board):
+                y = ny
+                return True
+            return False
 
-    def hard_drop():
-        nonlocal y, drop_timer
-        while valid(shape_cells(shape, x, y + 1), board):
-            y += 1
-        drop_timer = drop_interval
+        def rotate_piece():
+            nonlocal shape
+            r = rotate(shape)
+            if valid(shape_cells(r, x, y), board):
+                shape = r
 
-    def plan_ai():
-        nonlocal ai_queue, ai_info
-        ai_info = best_move(board, shape, color)
-        ai_queue = []
-        if ai_info is None:
-            return
-        rotations = unique_rotations(shape)
-        target_shape = rotations[ai_info["rotation"]]
-        if target_shape != shape:
-            current_rotations = unique_rotations(shape)
-            current_index = (
-                current_rotations.index(shape)
-                if shape in current_rotations
-                else 0
-            )
-            rot_steps = (ai_info["rotation"] - current_index) % len(current_rotations)
-            ai_queue.extend(["rot"] * rot_steps)
-        dx = ai_info["x"] - x
-        if dx < 0:
-            ai_queue.extend(["left"] * abs(dx))
-        elif dx > 0:
-            ai_queue.extend(["right"] * dx)
-        ai_queue.append("drop")
-        metrics = ai_info["metrics"]
-        history.append((metrics["reward"], metrics["penalty"]))
-        if len(history) > 60:
-            history.pop(0)
+        def hard_drop():
+            nonlocal y, drop_timer
+            while valid(shape_cells(shape, x, y + 1), board):
+                y += 1
+            drop_timer = drop_interval
 
-    running = True
-    while running:
-        dt = clock.tick(FPS)
-        drop_timer += dt
-        ai_timer += dt
+        def plan_ai():
+            nonlocal ai_queue, ai_info
+            ai_info = best_move(board, shape, color)
+            ai_queue = []
+            if ai_info is None:
+                return
+            rotations = unique_rotations(shape)
+            target_shape = rotations[ai_info["rotation"]]
+            if target_shape != shape:
+                current_rotations = unique_rotations(shape)
+                current_index = (
+                    current_rotations.index(shape)
+                    if shape in current_rotations
+                    else 0
+                )
+                rot_steps = (ai_info["rotation"] - current_index) % len(current_rotations)
+                ai_queue.extend(["rot"] * rot_steps)
+            dx = ai_info["x"] - x
+            if dx < 0:
+                ai_queue.extend(["left"] * abs(dx))
+            elif dx > 0:
+                ai_queue.extend(["right"] * dx)
+            ai_queue.append("drop")
+            metrics = ai_info["metrics"]
+            history.append((metrics["reward"], metrics["penalty"]))
+            if len(history) > 60:
+                history.pop(0)
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+        running = True
+        game_over = False
+        while running:
+            dt = clock.tick(FPS)
+            drop_timer += dt
+            ai_timer += dt
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
                     running = False
-                elif event.key == pygame.K_a:
-                    ai_enabled = not ai_enabled
-                    ai_queue = []
-                elif not ai_enabled:
-                    if event.key == pygame.K_LEFT:
-                        move_left()
-                    elif event.key == pygame.K_RIGHT:
-                        move_right()
-                    elif event.key == pygame.K_DOWN:
-                        move_down()
-                    elif event.key == pygame.K_UP:
-                        rotate_piece()
-                    elif event.key == pygame.K_SPACE:
-                        hard_drop()
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                    elif event.key == pygame.K_a and not game_over:
+                        ai_enabled = not ai_enabled
+                        ai_queue = []
+                    elif not ai_enabled:
+                        if event.key == pygame.K_LEFT:
+                            move_left()
+                        elif event.key == pygame.K_RIGHT:
+                            move_right()
+                        elif event.key == pygame.K_DOWN:
+                            move_down()
+                        elif event.key == pygame.K_UP:
+                            rotate_piece()
+                        elif event.key == pygame.K_SPACE:
+                            hard_drop()
 
-        if ai_enabled and not ai_queue:
-            plan_ai()
-
-        if ai_enabled and ai_queue and ai_timer >= ai_interval:
-            ai_timer = 0
-            action = ai_queue.pop(0)
-            if action == "left":
-                move_left()
-            elif action == "right":
-                move_right()
-            elif action == "rot":
-                rotate_piece()
-            elif action == "drop":
-                hard_drop()
-
-        if drop_timer >= drop_interval:
-            drop_timer = 0
-            if move_down():
-                pass
-            else:
-                for cx, cy in shape_cells(shape, x, y):
-                    if cy >= 0:
-                        board[cy][cx] = color
-                board, cleared = clear_lines(board)
-                if cleared:
-                    score += (cleared * cleared) * 100
-                    drop_interval = max(120, drop_interval - cleared * 20)
-                if not spawn():
-                    running = False
+            if game_over:
                 ai_queue = []
+                ai_enabled = False
+            elif ai_enabled and not ai_queue:
+                try:
+                    plan_ai()
+                except Exception:
+                    if log_file is not None:
+                        traceback.print_exc()
+                        log_file.flush()
+                    ai_enabled = False
+                    ai_queue = []
 
-        screen.fill(BG)
+            if ai_enabled and ai_queue and ai_timer >= ai_interval and not game_over:
+                ai_timer = 0
+                action = ai_queue.pop(0)
+                if action == "left":
+                    move_left()
+                elif action == "right":
+                    move_right()
+                elif action == "rot":
+                    rotate_piece()
+                elif action == "drop":
+                    hard_drop()
 
-        for row in range(ROWS):
-            for col in range(COLS):
-                rect = pygame.Rect(col * CELL, row * CELL, CELL, CELL)
-                pygame.draw.rect(screen, GRID, rect, 1)
-                cell = board[row][col]
-                if cell is not None:
-                    pygame.draw.rect(
-                        screen,
-                        cell,
-                        rect.inflate(-2, -2),
-                    )
+            if drop_timer >= drop_interval and not game_over:
+                drop_timer = 0
+                if move_down():
+                    pass
+                else:
+                    for cx, cy in shape_cells(shape, x, y):
+                        if cy >= 0:
+                            board[cy][cx] = color
+                    board, cleared = clear_lines(board)
+                    if cleared:
+                        score += (cleared * cleared) * 100
+                        drop_interval = max(120, drop_interval - cleared * 20)
+                    if not spawn():
+                        game_over = True
+                    ai_queue = []
 
-        for cx, cy in shape_cells(shape, x, y):
-            if cy >= 0:
-                rect = pygame.Rect(cx * CELL, cy * CELL, CELL, CELL)
-                pygame.draw.rect(screen, color, rect.inflate(-2, -2))
+            screen.fill(BG)
 
-        if ai_info is not None:
-            for cx, cy in ai_info["cells"]:
+            for row in range(ROWS):
+                for col in range(COLS):
+                    rect = pygame.Rect(col * CELL, row * CELL, CELL, CELL)
+                    pygame.draw.rect(screen, GRID, rect, 1)
+                    cell = board[row][col]
+                    if cell is not None:
+                        pygame.draw.rect(
+                            screen,
+                            cell,
+                            rect.inflate(-2, -2),
+                        )
+
+            for cx, cy in shape_cells(shape, x, y):
                 if cy >= 0:
                     rect = pygame.Rect(cx * CELL, cy * CELL, CELL, CELL)
-                    pygame.draw.rect(screen, GHOST, rect, 2)
+                    pygame.draw.rect(screen, color, rect.inflate(-2, -2))
 
-        panel_x = WIDTH + 12
-        score_surf = font.render(f"Score: {score}", True, TEXT)
-        mode_surf = font.render(f"AI: {'ON' if ai_enabled else 'OFF'}", True, TEXT)
-        hint_surf = small.render("A: toggle AI  ESC: quit", True, TEXT)
-        screen.blit(score_surf, (panel_x, 10))
-        screen.blit(mode_surf, (panel_x, 34))
-        screen.blit(hint_surf, (panel_x, 58))
+            if ai_info is not None:
+                for cx, cy in ai_info["cells"]:
+                    if cy >= 0:
+                        rect = pygame.Rect(cx * CELL, cy * CELL, CELL, CELL)
+                        pygame.draw.rect(screen, GHOST, rect, 2)
 
-        if ai_info is not None:
-            metrics = ai_info["metrics"]
-            info_lines = [
-                f"Best X: {ai_info['x']}",
-                f"Rotation: {ai_info['rotation']}",
-                f"Score: {metrics['score']:.2f}",
-                f"Lines: {metrics['reward'] // 100}",
-                f"Holes: {metrics['holes']}",
-                f"Height: {metrics['aggregate_height']}",
-                f"Bump: {metrics['bumpiness']}",
-                f"Max H: {metrics['max_height']}",
-            ]
-            for i, text in enumerate(info_lines):
-                surf = small.render(text, True, TEXT)
-                screen.blit(surf, (panel_x, 90 + i * 18))
+            panel_x = WIDTH + 12
+            score_surf = font.render(f"Score: {score}", True, TEXT)
+            mode_surf = font.render(f"AI: {'ON' if ai_enabled else 'OFF'}", True, TEXT)
+            hint_surf = small.render("A: toggle AI  ESC: quit", True, TEXT)
+            screen.blit(score_surf, (panel_x, 10))
+            screen.blit(mode_surf, (panel_x, 34))
+            screen.blit(hint_surf, (panel_x, 58))
+            if game_over:
+                over_surf = font.render("GAME OVER", True, PENALTY_COLOR)
+                exit_surf = small.render("Press ESC to quit", True, TEXT)
+                screen.blit(over_surf, (panel_x, 180))
+                screen.blit(exit_surf, (panel_x, 204))
 
-        chart_top = 250
-        chart_h = 120
-        chart_w = PANEL_W - 24
-        pygame.draw.rect(
-            screen,
-            GRID,
-            pygame.Rect(panel_x, chart_top, chart_w, chart_h),
-            1,
-        )
-        if history:
-            max_val = max(max(r, p) for r, p in history)
-            max_val = max(max_val, 1)
-            step = chart_w / max(len(history), 1)
-            for i, (reward, penalty) in enumerate(history):
-                x0 = panel_x + i * step
-                r_h = (reward / max_val) * (chart_h - 8)
-                p_h = (penalty / max_val) * (chart_h - 8)
-                pygame.draw.line(
-                    screen,
-                    REWARD_COLOR,
-                    (x0, chart_top + chart_h - 4),
-                    (x0, chart_top + chart_h - 4 - r_h),
-                    3,
-                )
-                pygame.draw.line(
-                    screen,
-                    PENALTY_COLOR,
-                    (x0 + 3, chart_top + chart_h - 4),
-                    (x0 + 3, chart_top + chart_h - 4 - p_h),
-                    3,
-                )
-            legend_r = small.render("Reward", True, REWARD_COLOR)
-            legend_p = small.render("Penalty", True, PENALTY_COLOR)
-            screen.blit(legend_r, (panel_x, chart_top + chart_h + 6))
-            screen.blit(legend_p, (panel_x + 90, chart_top + chart_h + 6))
+            if ai_info is not None:
+                metrics = ai_info["metrics"]
+                info_lines = [
+                    f"Best X: {ai_info['x']}",
+                    f"Rotation: {ai_info['rotation']}",
+                    f"Score: {metrics['score']:.2f}",
+                    f"Lines: {metrics['reward'] // 100}",
+                    f"Holes: {metrics['holes']}",
+                    f"Height: {metrics['aggregate_height']}",
+                    f"Bump: {metrics['bumpiness']}",
+                    f"Max H: {metrics['max_height']}",
+                ]
+                for i, text in enumerate(info_lines):
+                    surf = small.render(text, True, TEXT)
+                    screen.blit(surf, (panel_x, 90 + i * 18))
 
-        pygame.display.flip()
+            chart_top = 250
+            chart_h = 120
+            chart_w = PANEL_W - 24
+            pygame.draw.rect(
+                screen,
+                GRID,
+                pygame.Rect(panel_x, chart_top, chart_w, chart_h),
+                1,
+            )
+            if history:
+                max_val = max(max(r, p) for r, p in history)
+                max_val = max(max_val, 1)
+                step = chart_w / max(len(history), 1)
+                for i, (reward, penalty) in enumerate(history):
+                    x0 = panel_x + i * step
+                    r_h = (reward / max_val) * (chart_h - 8)
+                    p_h = (penalty / max_val) * (chart_h - 8)
+                    pygame.draw.line(
+                        screen,
+                        REWARD_COLOR,
+                        (x0, chart_top + chart_h - 4),
+                        (x0, chart_top + chart_h - 4 - r_h),
+                        3,
+                    )
+                    pygame.draw.line(
+                        screen,
+                        PENALTY_COLOR,
+                        (x0 + 3, chart_top + chart_h - 4),
+                        (x0 + 3, chart_top + chart_h - 4 - p_h),
+                        3,
+                    )
+                legend_r = small.render("Reward", True, REWARD_COLOR)
+                legend_p = small.render("Penalty", True, PENALTY_COLOR)
+                screen.blit(legend_r, (panel_x, chart_top + chart_h + 6))
+                screen.blit(legend_p, (panel_x + 90, chart_top + chart_h + 6))
 
-    pygame.quit()
-    sys.exit()
+            pygame.display.flip()
+    except Exception:
+        if log_file is not None:
+            traceback.print_exc()
+            log_file.flush()
+        raise
+    finally:
+        try:
+            pygame.quit()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# Last update: 2025-12-26 00:24:08 
+# Last update: 2025-12-26 00:34:53 
 import random
 import sys
 import traceback
@@ -9,21 +9,31 @@ from pathlib import Path
 import pygame
 
 
-CELL = 30
+CELL = 28
 COLS = 10
 ROWS = 20
 WIDTH = COLS * CELL
 HEIGHT = ROWS * CELL
-PANEL_W = 280
-WINDOW_W = WIDTH + PANEL_W
+MARGIN = 18
+PANEL_W = 320
+PANEL_GAP = 24
+WINDOW_W = WIDTH + PANEL_W + MARGIN * 2 + PANEL_GAP
+WINDOW_H = HEIGHT + MARGIN * 2
 FPS = 60
 
-BG = (30, 90, 200)
-GRID = (36, 36, 40)
-TEXT = (230, 230, 235)
-REWARD_COLOR = (80, 220, 140)
-PENALTY_COLOR = (240, 90, 90)
-GHOST = (240, 240, 240)
+BG_TOP = (8, 10, 28)
+BG_BOTTOM = (28, 80, 150)
+BOARD_TINT = (26, 50, 110)
+GRID = (90, 200, 255, 70)
+TEXT = (230, 255, 245)
+MUTED = (160, 210, 200)
+REWARD_COLOR = (110, 255, 190)
+PENALTY_COLOR = (255, 120, 160)
+GHOST = (255, 255, 255, 180)
+GLASS = (255, 255, 255, 35)
+GLASS_EDGE = (160, 255, 220, 110)
+ACCENT = (120, 255, 210)
+KEY_FLASH_MS = 180
 
 SHAPES = [
     # I
@@ -78,13 +88,13 @@ SHAPES = [
 ]
 
 COLORS = [
-    (255, 105, 180),
-    (255, 105, 180),
-    (255, 105, 180),
-    (255, 105, 180),
-    (255, 105, 180),
-    (255, 105, 180),
-    (255, 105, 180),
+    (80, 255, 255),   # I
+    (255, 240, 80),   # O
+    (200, 140, 255),  # T
+    (120, 255, 140),  # S
+    (255, 110, 140),  # Z
+    (110, 160, 255),  # J
+    (255, 170, 90),   # L
 ]
 
 WEIGHTS = {
@@ -95,6 +105,55 @@ WEIGHTS = {
     "max_height": -0.25,
 }
 
+
+def lerp(a, b, t):
+    return int(a + (b - a) * t)
+
+
+def draw_vertical_gradient(surface, top_color, bottom_color):
+    for y in range(surface.get_height()):
+        t = y / max(surface.get_height() - 1, 1)
+        color = (
+            lerp(top_color[0], bottom_color[0], t),
+            lerp(top_color[1], bottom_color[1], t),
+            lerp(top_color[2], bottom_color[2], t),
+        )
+        pygame.draw.line(surface, color, (0, y), (surface.get_width(), y))
+
+
+def draw_glass_rect(surface, rect, fill, edge, radius=16, width=1):
+    panel = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+    pygame.draw.rect(panel, fill, panel.get_rect(), border_radius=radius)
+    pygame.draw.rect(panel, edge, panel.get_rect(), width, border_radius=radius)
+    surface.blit(panel, rect.topleft)
+
+
+def draw_text(surface, text, font, color, pos, shadow=True):
+    if shadow:
+        shadow_surf = font.render(text, True, (10, 12, 20))
+        surface.blit(shadow_surf, (pos[0] + 1, pos[1] + 1))
+    surf = font.render(text, True, color)
+    surface.blit(surf, pos)
+
+
+def draw_scanlines(surface, alpha=28, spacing=3):
+    lines = pygame.Surface((surface.get_width(), surface.get_height()), pygame.SRCALPHA)
+    for y in range(0, surface.get_height(), spacing):
+        pygame.draw.line(lines, (5, 10, 20, alpha), (0, y), (surface.get_width(), y))
+    surface.blit(lines, (0, 0))
+
+
+def lighten(color, amount):
+    return (
+        min(color[0] + amount, 255),
+        min(color[1] + amount, 255),
+        min(color[2] + amount, 255),
+    )
+
+
+def draw_tile(surface, rect, color):
+    pygame.draw.rect(surface, color, rect.inflate(-4, -4), border_radius=6)
+    pygame.draw.rect(surface, lighten(color, 50), rect.inflate(-8, -8), 2, border_radius=6)
 
 def rotate(shape):
     return ["".join(shape[3 - c][r] for c in range(4)) for r in range(4)]
@@ -170,13 +229,14 @@ def place_on_board(board, shape, x, y, color):
 
 def evaluate_board(board, lines_cleared):
     aggregate_height, holes, bumpiness, max_height = board_metrics(board)
-    score = (
-        WEIGHTS["lines"] * lines_cleared
-        + WEIGHTS["aggregate_height"] * aggregate_height
-        + WEIGHTS["holes"] * holes
-        + WEIGHTS["bumpiness"] * bumpiness
-        + WEIGHTS["max_height"] * max_height
-    )
+    terms = {
+        "lines": WEIGHTS["lines"] * lines_cleared,
+        "aggregate_height": WEIGHTS["aggregate_height"] * aggregate_height,
+        "holes": WEIGHTS["holes"] * holes,
+        "bumpiness": WEIGHTS["bumpiness"] * bumpiness,
+        "max_height": WEIGHTS["max_height"] * max_height,
+    }
+    score = sum(terms.values())
     reward = lines_cleared * 100
     penalty = aggregate_height + holes * 5 + bumpiness * 2 + max_height * 3
     return {
@@ -187,6 +247,7 @@ def evaluate_board(board, lines_cleared):
         "holes": holes,
         "bumpiness": bumpiness,
         "max_height": max_height,
+        "terms": terms,
     }
 
 
@@ -267,11 +328,12 @@ def main():
 
     try:
         pygame.init()
-        screen = pygame.display.set_mode((WINDOW_W, HEIGHT))
+        screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         pygame.display.set_caption("Tetris")
         clock = pygame.time.Clock()
-        font = pygame.font.SysFont("Menlo", 18)
-        small = pygame.font.SysFont("Menlo", 14)
+        font = pygame.font.SysFont("Courier New", 18, bold=True)
+        small = pygame.font.SysFont("Courier New", 14)
+        tiny = pygame.font.SysFont("Courier New", 12)
 
         board = [[None for _ in range(COLS)] for _ in range(ROWS)]
         score = 0
@@ -284,35 +346,54 @@ def main():
         ai_info = None
         history = []
 
-        current = random.randrange(len(SHAPES))
-        shape = SHAPES[current]
-        color = COLORS[current]
+        board_x = MARGIN
+        board_y = MARGIN
+        panel_x = board_x + WIDTH + PANEL_GAP
+        panel_y = board_y
+        key_flash = {}
+
+        next_index = random.randrange(len(SHAPES))
+        next_shape = SHAPES[next_index]
+        next_color = COLORS[next_index]
+        current = None
+        shape = None
+        color = None
         x = COLS // 2 - 2
         y = -2
 
         def spawn():
-            nonlocal current, shape, color, x, y
-            current = random.randrange(len(SHAPES))
+            nonlocal current, shape, color, x, y, next_index, next_shape, next_color
+            current = next_index
             shape = SHAPES[current]
             color = COLORS[current]
+            next_index = random.randrange(len(SHAPES))
+            next_shape = SHAPES[next_index]
+            next_color = COLORS[next_index]
             x = COLS // 2 - 2
             y = -2
             return valid(shape_cells(shape, x, y), board)
 
+        def flash(action):
+            key_flash[action] = pygame.time.get_ticks()
+
         def move_left():
             nonlocal x
+            flash("LEFT")
             nx = x - 1
             if valid(shape_cells(shape, nx, y), board):
                 x = nx
 
         def move_right():
             nonlocal x
+            flash("RIGHT")
             nx = x + 1
             if valid(shape_cells(shape, nx, y), board):
                 x = nx
 
-        def move_down():
+        def move_down(user_action=False):
             nonlocal y
+            if user_action:
+                flash("DOWN")
             ny = y + 1
             if valid(shape_cells(shape, x, ny), board):
                 y = ny
@@ -321,12 +402,14 @@ def main():
 
         def rotate_piece():
             nonlocal shape
+            flash("ROT")
             r = rotate(shape)
             if valid(shape_cells(r, x, y), board):
                 shape = r
 
         def hard_drop():
             nonlocal y, drop_timer
+            flash("DROP")
             while valid(shape_cells(shape, x, y + 1), board):
                 y += 1
             drop_timer = drop_interval
@@ -359,6 +442,9 @@ def main():
             if len(history) > 60:
                 history.pop(0)
 
+        if not spawn():
+            return
+
         running = True
         game_over = False
         while running:
@@ -381,7 +467,7 @@ def main():
                         elif event.key == pygame.K_RIGHT:
                             move_right()
                         elif event.key == pygame.K_DOWN:
-                            move_down()
+                            move_down(user_action=True)
                         elif event.key == pygame.K_UP:
                             rotate_piece()
                         elif event.key == pygame.K_SPACE:
@@ -428,96 +514,188 @@ def main():
                         game_over = True
                     ai_queue = []
 
-            screen.fill(BG)
-
+            draw_vertical_gradient(screen, BG_TOP, BG_BOTTOM)
+            draw_glass_rect(
+                screen,
+                pygame.Rect(board_x - 10, board_y - 10, WIDTH + 20, HEIGHT + 20),
+                (255, 255, 255, 25),
+                GLASS_EDGE,
+                radius=20,
+            )
+            board_surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            board_surface.fill((*BOARD_TINT, 140))
             for row in range(ROWS):
                 for col in range(COLS):
                     rect = pygame.Rect(col * CELL, row * CELL, CELL, CELL)
-                    pygame.draw.rect(screen, GRID, rect, 1)
+                    pygame.draw.rect(board_surface, GRID, rect, 1, border_radius=4)
+            screen.blit(board_surface, (board_x, board_y))
+
+            for row in range(ROWS):
+                for col in range(COLS):
                     cell = board[row][col]
                     if cell is not None:
-                        pygame.draw.rect(
-                            screen,
-                            cell,
-                            rect.inflate(-2, -2),
+                        rect = pygame.Rect(
+                            board_x + col * CELL,
+                            board_y + row * CELL,
+                            CELL,
+                            CELL,
                         )
+                        draw_tile(screen, rect, cell)
 
             for cx, cy in shape_cells(shape, x, y):
                 if cy >= 0:
-                    rect = pygame.Rect(cx * CELL, cy * CELL, CELL, CELL)
-                    pygame.draw.rect(screen, color, rect.inflate(-2, -2))
+                    rect = pygame.Rect(
+                        board_x + cx * CELL,
+                        board_y + cy * CELL,
+                        CELL,
+                        CELL,
+                    )
+                    draw_tile(screen, rect, color)
 
             if ai_info is not None:
                 for cx, cy in ai_info["cells"]:
                     if cy >= 0:
-                        rect = pygame.Rect(cx * CELL, cy * CELL, CELL, CELL)
-                        pygame.draw.rect(screen, GHOST, rect, 2)
+                        rect = pygame.Rect(
+                            board_x + cx * CELL,
+                            board_y + cy * CELL,
+                            CELL,
+                            CELL,
+                        )
+                        pygame.draw.rect(screen, GHOST, rect, 2, border_radius=6)
 
-            panel_x = WIDTH + 12
-            score_surf = font.render(f"Score: {score}", True, TEXT)
-            mode_surf = font.render(f"AI: {'ON' if ai_enabled else 'OFF'}", True, TEXT)
-            hint_surf = small.render("A: toggle AI  ESC: quit", True, TEXT)
-            screen.blit(score_surf, (panel_x, 10))
-            screen.blit(mode_surf, (panel_x, 34))
-            screen.blit(hint_surf, (panel_x, 58))
+            panel_rect = pygame.Rect(panel_x, panel_y, PANEL_W, HEIGHT)
+            draw_glass_rect(screen, panel_rect, GLASS, GLASS_EDGE, radius=18)
+
+            draw_text(screen, f"Score {score}", font, TEXT, (panel_x + 16, panel_y + 12))
+            draw_text(
+                screen,
+                f"AI {'ON' if ai_enabled else 'OFF'}",
+                font,
+                ACCENT,
+                (panel_x + 16, panel_y + 36),
+            )
+            draw_text(
+                screen,
+                "A toggle AI   ESC quit",
+                tiny,
+                MUTED,
+                (panel_x + 16, panel_y + 62),
+                shadow=False,
+            )
             if game_over:
-                over_surf = font.render("GAME OVER", True, PENALTY_COLOR)
-                exit_surf = small.render("Press ESC to quit", True, TEXT)
-                screen.blit(over_surf, (panel_x, 180))
-                screen.blit(exit_surf, (panel_x, 204))
+                draw_text(
+                    screen,
+                    "GAME OVER",
+                    font,
+                    PENALTY_COLOR,
+                    (panel_x + 16, panel_y + 92),
+                )
+                draw_text(
+                    screen,
+                    "Press ESC to quit",
+                    small,
+                    MUTED,
+                    (panel_x + 16, panel_y + 116),
+                )
+
+            next_box = pygame.Rect(panel_x + 16, panel_y + 140, 110, 110)
+            draw_glass_rect(screen, next_box, (255, 255, 255, 30), GLASS_EDGE, radius=14)
+            draw_text(screen, "NEXT", tiny, MUTED, (panel_x + 24, panel_y + 146), shadow=False)
+            for r in range(4):
+                for c in range(4):
+                    if next_shape[r][c] == "#":
+                        rect = pygame.Rect(
+                            next_box.x + 18 + c * 18,
+                            next_box.y + 26 + r * 18,
+                            16,
+                            16,
+                        )
+                        draw_tile(screen, rect, next_color)
+
+            key_y = panel_y + 140
+            key_x = panel_x + 140
+            key_w = 46
+            key_h = 28
+            key_gap = 8
+            now = pygame.time.get_ticks()
+            keys = [
+                ("LEFT", key_x, key_y),
+                ("ROT", key_x + key_w + key_gap, key_y),
+                ("RIGHT", key_x + 2 * (key_w + key_gap), key_y),
+                ("DOWN", key_x + 0.5 * (key_w + key_gap), key_y + key_h + key_gap),
+                ("DROP", key_x + 1.5 * (key_w + key_gap), key_y + key_h + key_gap),
+            ]
+            draw_text(screen, "KEYS", tiny, MUTED, (key_x, key_y - 16), shadow=False)
+            for label, kx, ky in keys:
+                active = now - key_flash.get(label, -9999) < KEY_FLASH_MS
+                color = (255, 255, 255, 90) if active else (255, 255, 255, 30)
+                edge = (255, 255, 255, 140) if active else GLASS_EDGE
+                rect = pygame.Rect(int(kx), int(ky), key_w, key_h)
+                draw_glass_rect(screen, rect, color, edge, radius=10)
+                draw_text(
+                    screen,
+                    label,
+                    tiny,
+                    TEXT if active else MUTED,
+                    (rect.x + 6, rect.y + 7),
+                    shadow=False,
+                )
 
             if ai_info is not None:
                 metrics = ai_info["metrics"]
+                terms = metrics["terms"]
                 info_lines = [
-                    f"Best X: {ai_info['x']}",
-                    f"Rotation: {ai_info['rotation']}",
-                    f"Score: {metrics['score']:.2f}",
-                    f"Lines: {metrics['reward'] // 100}",
-                    f"Holes: {metrics['holes']}",
-                    f"Height: {metrics['aggregate_height']}",
-                    f"Bump: {metrics['bumpiness']}",
-                    f"Max H: {metrics['max_height']}",
+                    f"Target X {ai_info['x']}  Rot {ai_info['rotation']}",
+                    f"Drop Y {ai_info['y']}",
+                    f"Eval {metrics['score']:.2f}",
+                    f"Reward {metrics['reward']}  Pen {metrics['penalty']}",
+                    f"Lines {metrics['reward'] // 100}  ({terms['lines']:+.2f})",
+                    f"Height {metrics['aggregate_height']}  ({terms['aggregate_height']:+.2f})",
+                    f"Holes {metrics['holes']}  ({terms['holes']:+.2f})",
+                    f"Bump {metrics['bumpiness']}  ({terms['bumpiness']:+.2f})",
+                    f"Max H {metrics['max_height']}  ({terms['max_height']:+.2f})",
                 ]
                 for i, text in enumerate(info_lines):
-                    surf = small.render(text, True, TEXT)
-                    screen.blit(surf, (panel_x, 90 + i * 18))
+                    draw_text(
+                        screen,
+                        text,
+                        tiny,
+                        TEXT,
+                        (panel_x + 16, panel_y + 270 + i * 16),
+                        shadow=False,
+                    )
 
-            chart_top = 250
+            chart_top = panel_y + 430
             chart_h = 120
-            chart_w = PANEL_W - 24
-            pygame.draw.rect(
-                screen,
-                GRID,
-                pygame.Rect(panel_x, chart_top, chart_w, chart_h),
-                1,
-            )
+            chart_w = PANEL_W - 32
+            chart_rect = pygame.Rect(panel_x + 16, chart_top, chart_w, chart_h)
+            draw_glass_rect(screen, chart_rect, (255, 255, 255, 25), GLASS_EDGE, radius=14)
             if history:
                 max_val = max(max(r, p) for r, p in history)
                 max_val = max(max_val, 1)
                 step = chart_w / max(len(history), 1)
                 for i, (reward, penalty) in enumerate(history):
-                    x0 = panel_x + i * step
-                    r_h = (reward / max_val) * (chart_h - 8)
-                    p_h = (penalty / max_val) * (chart_h - 8)
+                    x0 = chart_rect.x + i * step
+                    r_h = (reward / max_val) * (chart_h - 14)
+                    p_h = (penalty / max_val) * (chart_h - 14)
                     pygame.draw.line(
                         screen,
                         REWARD_COLOR,
-                        (x0, chart_top + chart_h - 4),
-                        (x0, chart_top + chart_h - 4 - r_h),
+                        (x0, chart_rect.y + chart_h - 7),
+                        (x0, chart_rect.y + chart_h - 7 - r_h),
                         3,
                     )
                     pygame.draw.line(
                         screen,
                         PENALTY_COLOR,
-                        (x0 + 3, chart_top + chart_h - 4),
-                        (x0 + 3, chart_top + chart_h - 4 - p_h),
+                        (x0 + 3, chart_rect.y + chart_h - 7),
+                        (x0 + 3, chart_rect.y + chart_h - 7 - p_h),
                         3,
                     )
-                legend_r = small.render("Reward", True, REWARD_COLOR)
-                legend_p = small.render("Penalty", True, PENALTY_COLOR)
-                screen.blit(legend_r, (panel_x, chart_top + chart_h + 6))
-                screen.blit(legend_p, (panel_x + 90, chart_top + chart_h + 6))
+            draw_text(screen, "REWARD", tiny, REWARD_COLOR, (chart_rect.x, chart_rect.y + chart_h + 6), shadow=False)
+            draw_text(screen, "PENALTY", tiny, PENALTY_COLOR, (chart_rect.x + 80, chart_rect.y + chart_h + 6), shadow=False)
 
+            draw_scanlines(screen)
             pygame.display.flip()
     except Exception:
         if log_file is not None:

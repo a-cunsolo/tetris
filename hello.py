@@ -1,3 +1,4 @@
+# Last update: 2025-12-26 00:03:41 
 import random
 import sys
 from datetime import datetime
@@ -162,7 +163,9 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_LEFT:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+                elif event.key == pygame.K_LEFT:
                     nx = x - 1
                     if valid(shape_cells(shape, nx, y), board):
                         x = nx
